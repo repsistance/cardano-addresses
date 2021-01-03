@@ -1,0 +1,55 @@
+name: Continuous Integration (MacOS)
+
+on:
+  pull_request:
+    branches: [ "master" ]
+  push:
+    branches: [ "*" ]
+    tags: [ "*.*.*" ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: 'GitHub actions env workaround'
+      run: 'echo "ACTIONS_ALLOW_UNSECURE_COMMANDS=true" >> $GITHUB_ENV'
+
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v1
+
+    - name: 🧰 Setup Stack
+      uses: mstksg/setup-stack@v1
+
+    - name: 💾 Cache Dependencies
+      id: cache
+      uses: actions/cache@v1
+      with:
+        path: ~/.stack
+        key: ${{ matrix.os }}-${{ hashFiles('stack.yaml') }}
+
+    - name: 📸 Build Snapshot
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        stack --no-terminal test --bench --only-snapshot
+
+    - name: 🔨 Build & Test
+      run: |
+        stack --no-terminal test --no-run-tests --bench --haddock --no-haddock-deps --no-run-benchmarks --flag cardano-addresses:release --flag cardano-addresses-cli:release
+        mkdir -p bin && cp $(stack path --local-install-root)/bin/* bin && chmod +x bin/*
+        mkdir -p dist/haddock && mv $(stack path --local-install-root)/doc/* dist/haddock
+        sed -i 's@href="[^"]*/doc/\([^"]*.html\)"@href="\1"@g' dist/haddock/index.html
+        wget -O Makefile https://raw.githubusercontent.com/input-output-hk/adrestia/master/.haskell/coverage/Makefile
+        mkdir -p .coverage && touch .coverage/template.overlay
+        DESTDIR=dist/coverage make report && DESTDIR=dist/coverage make badge
+        echo "Checking for updated cabal files"
+        git diff --exit-code -- '*.cabal' && echo OK
+
+    - name: 📎 Upload Artifact
+      uses: actions/upload-artifact@v1
+      with:
+        name: ${{ matrix.os }}-exe
+        path: bin
